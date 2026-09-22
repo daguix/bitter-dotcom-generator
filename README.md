@@ -290,3 +290,7 @@ cargo clippy --all-targets -- -D warnings
 - The syllable filter is heuristic and favors English-like written forms.
 - The LLM client targets the OpenAI Chat Completions protocol as implemented by
   OpenAI and Ollama; provider-specific APIs are not used.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
