@@ -1,0 +1,5 @@
+We use mathematics and geometry to build software for large-scale data
+processing and analytics.
+
+Our products span approximate analytics, dataset reduction, vector search, and
+balanced workload partitioning.

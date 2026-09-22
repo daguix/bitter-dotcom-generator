@@ -1,0 +1,11 @@
+/target
+
+# data/  : hand-written inputs
+# cache/ and out/ contain private run artifacts and must never be published.
+/cache/
+/out/
+
+# Never store secrets in the repository. The key lives in the environment or in
+# ~/.config/bitter/openai-key, outside the repository tree.
+.env
+*.key
