@@ -13,11 +13,47 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::Duration;
 
-const API: &str = "https://api.openai.com/v1/chat/completions";
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum Provider {
+    Openai,
+    Ollama,
+}
+
+impl Provider {
+    pub fn default_base(self) -> &'static str {
+        match self {
+            Provider::Openai => "https://api.openai.com/v1",
+            Provider::Ollama => "http://localhost:11434/v1",
+        }
+    }
+
+    pub fn default_triage_model(self) -> &'static str {
+        match self {
+            Provider::Openai => "gpt-5.4-mini",
+            Provider::Ollama => "gpt-oss:20b",
+        }
+    }
+
+    pub fn default_description_model(self) -> &'static str {
+        match self {
+            Provider::Openai => "gpt-5.5",
+            Provider::Ollama => "gpt-oss:20b",
+        }
+    }
+
+    pub fn cache_model(self, api_base: &str, model: &str) -> String {
+        if self == Provider::Openai && api_base == self.default_base() {
+            model.to_string()
+        } else {
+            format!("{self:?}@{api_base}:{model}")
+        }
+    }
+}
 
 pub struct Judge {
     http: reqwest::Client,
-    key: String,
+    api_url: String,
+    key: Option<String>,
     temperature: Option<f32>,
 }
 
@@ -74,18 +110,18 @@ struct Message {
 /// there cannot be committed accidentally.
 fn key_file() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(std::path::Path::new(&home).join(".config/bitter/openai-key"))
+    Some(std::path::Path::new(&home).join(".config/bitter-dotcom-generator/openai-key"))
 }
 
-/// Looks for the key in the environment, then in the configuration file.
-fn find_key() -> Result<String> {
+/// Looks for the OpenAI key in the environment, then in the configuration file.
+fn find_openai_key() -> Result<String> {
     if let Ok(k) = std::env::var("OPENAI_API_KEY") {
         let k = k.trim().to_string();
         if !k.is_empty() {
             return Ok(k);
         }
     }
-    let path = key_file().context("HOME introuvable")?;
+    let path = key_file().context("HOME is unavailable")?;
     let raw = std::fs::read_to_string(&path).with_context(|| {
         format!(
             "no key found: neither OPENAI_API_KEY in the environment nor {}",
@@ -97,9 +133,31 @@ fn find_key() -> Result<String> {
     Ok(k)
 }
 
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 impl Judge {
-    pub fn new(temperature: Option<f32>) -> Result<Judge> {
-        let key = find_key()?;
+    pub fn new(provider: Provider, api_base: &str, temperature: Option<f32>) -> Result<Judge> {
+        let api_base = api_base.trim_end_matches('/');
+        anyhow::ensure!(!api_base.is_empty(), "API base URL cannot be empty");
+        let api_url = format!("{api_base}/chat/completions");
+        let parsed = reqwest::Url::parse(&api_url).context("invalid API base URL")?;
+        anyhow::ensure!(
+            matches!(parsed.scheme(), "http" | "https"),
+            "API base URL must use HTTP or HTTPS"
+        );
+        anyhow::ensure!(
+            parsed.username().is_empty() && parsed.password().is_none(),
+            "API credentials must not be embedded in the URL"
+        );
+        let key = match provider {
+            Provider::Openai => Some(find_openai_key()?),
+            Provider::Ollama => optional_env("OLLAMA_API_KEY"),
+        };
         // 120 seconds was insufficient: a reasoning model comparing ten names
         // with existing brands can easily exceed that timeout, silently losing
         // the batch.
@@ -109,6 +167,7 @@ impl Judge {
             .context("building the HTTP client")?;
         Ok(Judge {
             http,
+            api_url,
             key,
             temperature,
         })
@@ -149,7 +208,7 @@ impl Judge {
                 Ok(v) => return Ok(v),
                 // Waiting will not fix an invalid key or exhausted quota. More
                 // retries would only bury the useful error message.
-                Err(e) if definitif(&e) => return Err(e),
+                Err(e) if permanent(&e) => return Err(e),
                 Err(e) => last = e,
             }
         }
@@ -160,10 +219,12 @@ impl Judge {
         &self,
         body: &serde_json::Value,
     ) -> Result<Vec<T>> {
-        let resp = self
-            .http
-            .post(API)
-            .bearer_auth(&self.key)
+        let resp = self.http.post(&self.api_url);
+        let request = match &self.key {
+            Some(key) => resp.bearer_auth(key),
+            None => resp,
+        };
+        let resp = request
             .json(body)
             .send()
             .await
@@ -222,6 +283,7 @@ impl Judge {
     pub async fn describe(
         &self,
         model: &str,
+        cache_model: &str,
         brief: &str,
         names: &[String],
     ) -> Result<Vec<Verdict>> {
@@ -236,9 +298,9 @@ impl Judge {
                 v.severity
             );
         }
-        let id = prompt_id(model, brief);
+        let id = prompt_id(cache_model, brief);
         for v in &mut out {
-            v.model = model.to_string();
+            v.model = cache_model.to_string();
             v.prompt = id.clone();
         }
         Ok(out)
@@ -280,7 +342,7 @@ fn validate_response_names<T>(
 /// resulting judgment just as much as the model does.
 /// Returns true for errors no retry can fix: rejected key, nonexistent model,
 /// exhausted quota, or malformed request.
-fn definitif(e: &anyhow::Error) -> bool {
+fn permanent(e: &anyhow::Error) -> bool {
     format!("{e:#}").contains("[permanent]")
 }
 
@@ -346,6 +408,26 @@ pub fn prompt_id(model: &str, brief: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_defaults_are_isolated_in_caches() {
+        assert_eq!(Provider::Openai.default_base(), "https://api.openai.com/v1");
+        assert_eq!(Provider::Ollama.default_base(), "http://localhost:11434/v1");
+        assert_eq!(
+            Provider::Openai.cache_model("https://api.openai.com/v1", "example"),
+            "example"
+        );
+        assert_eq!(
+            Provider::Ollama.cache_model("http://localhost:11434/v1", "example"),
+            "Ollama@http://localhost:11434/v1:example"
+        );
+    }
+
+    #[test]
+    fn ollama_client_does_not_require_an_openai_key() {
+        let judge = Judge::new(Provider::Ollama, "http://localhost:11434/v1/", None).unwrap();
+        assert_eq!(judge.api_url, "http://localhost:11434/v1/chat/completions");
+    }
 
     #[test]
     fn rejects_partial_or_foreign_responses() {

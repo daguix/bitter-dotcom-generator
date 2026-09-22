@@ -8,7 +8,7 @@ mod syllable;
 use anyhow::{Context, Result};
 use check::{Availability, Rdap, check_all};
 use clap::{Parser, Subcommand};
-use judge::{Judge, Triage, Verdict, prompt_id};
+use judge::{Judge, Provider, Triage, Verdict, prompt_id};
 use markov::Markov;
 use scan::{ScanOpts, scan};
 use std::collections::{HashMap, HashSet};
@@ -80,15 +80,21 @@ enum Cmd {
     Judge {
         /// Output from `check` (JSONL of available names).
         input: String,
+        /// LLM provider. Ollama uses its local OpenAI-compatible endpoint.
+        #[arg(long, value_enum, default_value_t = Provider::Openai)]
+        provider: Provider,
+        /// API base URL. Defaults to the selected provider's standard endpoint.
+        #[arg(long)]
+        api_base: Option<String>,
         /// Positioning brief submitted to the model.
         #[arg(long, default_value = "data/brief.txt")]
         brief: String,
         /// Triage model for pass 1. Most of the volume goes through it.
-        #[arg(long, default_value = "gpt-5.4-mini")]
-        triage_model: String,
+        #[arg(long)]
+        triage_model: Option<String>,
         /// Description model for pass 2, used only on finalists.
-        #[arg(long, default_value = "gpt-5.5")]
-        model: String,
+        #[arg(long)]
+        model: Option<String>,
         /// Names per request in pass 1.
         #[arg(long, default_value_t = 100, value_parser = parse_positive_usize)]
         batch: usize,
@@ -105,7 +111,7 @@ enum Cmd {
         #[arg(long, default_value_t = 4, value_parser = parse_positive_usize)]
         diversity: usize,
         /// Concurrent requests.
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 4, value_parser = parse_positive_usize)]
         concurrency: usize,
         /// Temperature. Omitted by default because recent reasoning models reject
         /// any value other than their default.
@@ -524,6 +530,8 @@ async fn main() -> Result<()> {
         }
         Cmd::Judge {
             input,
+            provider,
+            api_base,
             brief,
             triage_model,
             model,
@@ -538,6 +546,18 @@ async fn main() -> Result<()> {
             judged_cache,
             out,
         } => {
+            let api_base = api_base
+                .as_deref()
+                .unwrap_or_else(|| provider.default_base())
+                .trim_end_matches('/')
+                .to_string();
+            anyhow::ensure!(!api_base.is_empty(), "API base URL cannot be empty");
+            let triage_model =
+                triage_model.unwrap_or_else(|| provider.default_triage_model().to_string());
+            let model = model.unwrap_or_else(|| provider.default_description_model().to_string());
+            let triage_cache_model = provider.cache_model(&api_base, &triage_model);
+            let description_cache_model = provider.cache_model(&api_base, &model);
+
             let text =
                 std::fs::read_to_string(&input).with_context(|| format!("reading {input}"))?;
             let names: Vec<String> = text
@@ -552,14 +572,16 @@ async fn main() -> Result<()> {
             anyhow::ensure!(!names.is_empty(), "no names to judge");
             // Always print this: it is the description-cache key, and without it
             // there is no way to know what the cache contains.
-            let fingerprint = prompt_id(&model, &brief);
-            eprintln!("description prompt: {model} / {fingerprint}");
+            let fingerprint = prompt_id(&description_cache_model, &brief);
+            eprintln!(
+                "provider: {provider:?}, API: {api_base}, description prompt: {description_cache_model} / {fingerprint}"
+            );
 
             let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
             // Pass 1 costs money. Write each result immediately so an interruption
             // never causes it to be purchased twice.
-            let cached = load_fit_cache(&fit_cache, &triage_model)?;
+            let cached = load_fit_cache(&fit_cache, &triage_cache_model)?;
             let mut rated: Vec<Triage> = names
                 .iter()
                 .filter_map(|n| {
@@ -589,7 +611,7 @@ async fn main() -> Result<()> {
             let judge = if pending.is_empty() {
                 None
             } else {
-                Some(Arc::new(Judge::new(temperature)?))
+                Some(Arc::new(Judge::new(provider, &api_base, temperature)?))
             };
 
             let mut journal = std::io::BufWriter::new(
@@ -623,7 +645,7 @@ async fn main() -> Result<()> {
                                 serde_json::json!({
                                     "name": t.name,
                                     "fit": t.fit,
-                                    "model": triage_model,
+                                    "model": triage_cache_model,
                                 })
                             )?;
                         }
@@ -703,7 +725,8 @@ async fn main() -> Result<()> {
                 model
             );
             let finalists: Vec<String> = rated.iter().map(|r| r.name.clone()).collect();
-            let cached_descriptions = load_judged(&judged_cache, &model, &fingerprint)?;
+            let cached_descriptions =
+                load_judged(&judged_cache, &description_cache_model, &fingerprint)?;
             let to_describe: Vec<String> = finalists
                 .iter()
                 .filter(|n| !cached_descriptions.contains_key(*n))
@@ -719,7 +742,9 @@ async fn main() -> Result<()> {
             // No descriptions needed: no key is required because everything is cached.
             let judge = match judge {
                 Some(j) => Some(j),
-                None if !to_describe.is_empty() => Some(Arc::new(Judge::new(temperature)?)),
+                None if !to_describe.is_empty() => {
+                    Some(Arc::new(Judge::new(provider, &api_base, temperature)?))
+                }
                 None => None,
             };
             let mut journal = std::io::BufWriter::new(
@@ -741,10 +766,14 @@ async fn main() -> Result<()> {
             for chunk in to_describe.chunks(describe_batch) {
                 let judge = judge.clone().expect("client required for descriptions");
                 let (sem, brief) = (sem.clone(), brief.clone());
-                let (chunk, model) = (chunk.to_vec(), model.clone());
+                let (chunk, model, cache_model) = (
+                    chunk.to_vec(),
+                    model.clone(),
+                    description_cache_model.clone(),
+                );
                 set.spawn(async move {
                     let _p = sem.acquire_owned().await.expect("open semaphore");
-                    judge.describe(&model, &brief, &chunk).await
+                    judge.describe(&model, &cache_model, &brief, &chunk).await
                 });
             }
             let mut written = 0usize;

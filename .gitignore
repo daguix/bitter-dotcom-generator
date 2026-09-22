@@ -6,6 +6,8 @@
 /out/
 
 # Never store secrets in the repository. The key lives in the environment or in
-# ~/.config/bitter/openai-key, outside the repository tree.
+# ~/.config/bitter-dotcom-generator/openai-key, outside the repository tree.
 .env
+.env.*
+!.env.example
 *.key
