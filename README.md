@@ -52,11 +52,10 @@ Create local directories for generated data:
 mkdir -p cache out
 ```
 
-Generate up to 5,000 six-letter candidates:
+Generate up to 5,000 seven-letter candidates (the default length):
 
 ```bash
 cargo run --release -- scan \
-  --len 6 \
   --top 5000 \
   --out out/candidates.jsonl
 ```
@@ -173,7 +172,7 @@ cargo run --release -- scan [OPTIONS]
 
 Important options:
 
-- `--len <6|7>`: candidate length; default `6`
+- `--len <6|7>`: candidate length; default `7`
 - `--threshold <FLOAT>`: minimum average log probability; higher is stricter
 - `--top <N>`: maximum number of retained candidates; default `50000`
 - `--min-syl <N>` / `--max-syl <N>`: accepted syllable range
@@ -249,7 +248,7 @@ whose character patterns the Markov model learns. Use another file globally with
 `--corpus`:
 
 ```bash
-cargo run --release -- --corpus path/to/seeds.txt scan --len 6
+cargo run --release -- --corpus path/to/seeds.txt scan
 ```
 
 `data/brief.txt` describes the company and products for the LLM evaluation. Edit

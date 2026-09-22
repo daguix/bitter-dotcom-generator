@@ -31,7 +31,7 @@ enum Cmd {
     #[command(allow_negative_numbers = true)]
     Scan {
         /// Name length (6 or 7).
-        #[arg(long, default_value_t = 6, value_parser = parse_scan_len)]
+        #[arg(long, default_value_t = 7, value_parser = parse_scan_len)]
         len: usize,
         /// Average log-probability threshold per transition. Higher is stricter.
         #[arg(long, default_value_t = -2.0, value_parser = parse_finite_f32)]
@@ -845,6 +845,15 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_defaults_to_seven_letters() {
+        let cli = Cli::try_parse_from(["bitter", "scan"]).unwrap();
+        let Cmd::Scan { len, .. } = cli.cmd else {
+            unreachable!("scan command expected");
+        };
+        assert_eq!(len, 7);
+    }
 
     #[test]
     fn cli_rejects_dangerous_values() {
