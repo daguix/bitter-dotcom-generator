@@ -107,7 +107,7 @@ enum Cmd {
         keep: usize,
         /// Two finalists may not share an n-gram of this size. Without this
         /// constraint, fit-based sorting returns clusters of near-duplicates
-        /// (sequing, sequary, sequigi…): many names, few ideas. 0 disables it.
+        /// (sequing, sequary, sequigi…): many names, few ideas. Must be positive.
         #[arg(long, default_value_t = 4, value_parser = parse_positive_usize)]
         diversity: usize,
         /// Concurrent requests.
@@ -862,6 +862,9 @@ mod tests {
             Cli::try_parse_from(["bitter", "check", "input.jsonl", "--concurrency", "0"]).is_err()
         );
         assert!(Cli::try_parse_from(["bitter", "judge", "input.jsonl", "--batch", "0"]).is_err());
+        assert!(
+            Cli::try_parse_from(["bitter", "judge", "input.jsonl", "--diversity", "0"]).is_err()
+        );
     }
 
     #[test]

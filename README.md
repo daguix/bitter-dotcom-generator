@@ -228,7 +228,8 @@ Important options:
 - `--batch <N>`: names per triage request; default `100`
 - `--describe-batch <N>`: names per description request; default `5`
 - `--keep <N>`: number of finalists to describe; default `40`
-- `--diversity <N>`: n-gram diversity constraint between finalists
+- `--diversity <N>`: positive n-gram diversity constraint between finalists;
+  default `4`
 - `--concurrency <N>`: concurrent API requests; default `4`
 - `--triage-only`: stop after scoring and write the ranked selection
 - `--fit-cache <FILE>`: pass-1 cache; default `cache/fit.jsonl`
