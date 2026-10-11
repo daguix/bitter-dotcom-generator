@@ -80,8 +80,9 @@ enum Cmd {
     Judge {
         /// Output from `check` (JSONL of available names).
         input: String,
-        /// LLM provider. Ollama uses its local OpenAI-compatible endpoint.
-        #[arg(long, value_enum, default_value_t = Provider::Openai)]
+        /// LLM provider. Anthropic uses the Claude Messages API; Ollama uses its
+        /// local OpenAI-compatible endpoint.
+        #[arg(long, value_enum, default_value_t = Provider::Anthropic)]
         provider: Provider,
         /// API base URL. Defaults to the selected provider's standard endpoint.
         #[arg(long)]

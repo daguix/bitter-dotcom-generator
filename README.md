@@ -4,8 +4,8 @@ A Rust command-line pipeline for generating short, pronounceable `.com` domain
 names from a domain-specific vocabulary.
 
 The program explores possible names, filters out weak or overly familiar ones,
-checks `.com` availability through RDAP, and can use OpenAI or local Ollama
-models to rank and describe the remaining candidates against a positioning
+checks `.com` availability through RDAP, and can use Claude, OpenAI or local
+Ollama models to rank and describe the remaining candidates against a positioning
 brief.
 
 ## How it works
@@ -21,7 +21,8 @@ The pipeline has three main stages:
    runs do not request the same domain again.
 3. **Judge candidates** — an LLM first assigns fit scores in batches. A second
    pass writes taglines, rationales, and concerns for a smaller,
-   diversity-filtered set of finalists. The LLM can run through OpenAI or Ollama.
+   diversity-filtered set of finalists. The LLM can run through Claude, OpenAI or
+   Ollama.
 
 The Markov score is intentionally hidden from the LLM. Generation quality and
 business relevance are evaluated independently.
@@ -30,7 +31,8 @@ business relevance are evaluated independently.
 
 - A recent stable Rust toolchain with Cargo
 - Network access for RDAP checks
-- An OpenAI API key or a local Ollama installation for the optional `judge` stage
+- An Anthropic or OpenAI API key, or a local Ollama installation, for the
+  optional `judge` stage
 
 Install Rust through [rustup](https://rustup.rs/), clone this repository, then
 build the optimized binary from its directory:
@@ -70,7 +72,7 @@ cargo run --release -- check out/candidates.jsonl \
 Rank and describe the available names:
 
 ```bash
-export OPENAI_API_KEY="your-api-key"
+export ANTHROPIC_API_KEY="your-api-key"
 
 cargo run --release -- judge out/available.jsonl \
   --out out/judgments.jsonl
@@ -79,7 +81,30 @@ cargo run --release -- judge out/available.jsonl \
 Both `cache/` and `out/` are ignored by Git because they may contain private,
 costly, or project-specific run artifacts.
 
+## Claude API key
+
+`judge` uses Claude by default: `claude-sonnet-5-5` for triage and
+`claude-opus-5-5` for finalist descriptions, with structured JSON outputs.
+Create a key in the [Claude Console](https://platform.claude.com/settings/keys)
+(Settings → API keys → Create key); API usage is billed to the organization's
+prepaid credits, separately from any Claude subscription.
+
+Export it as `ANTHROPIC_API_KEY`, or store it in a local file outside the
+repository:
+
+```bash
+install -d -m 700 ~/.config/bitter-dotcom-generator
+read -rsp "Anthropic API key: " key; echo
+printf '%s\n' "$key" > ~/.config/bitter-dotcom-generator/anthropic-key
+chmod 600 ~/.config/bitter-dotcom-generator/anthropic-key
+unset key
+```
+
+`ANTHROPIC_API_KEY` takes precedence when both are present.
+
 ## OpenAI API key
+
+Select OpenAI with `judge --provider openai`.
 
 The recommended setup is the `OPENAI_API_KEY` environment variable:
 
@@ -212,7 +237,7 @@ later runs rather than being treated as available.
 
 ### `judge`
 
-Reads available-name JSONL and runs a two-pass OpenAI evaluation.
+Reads available-name JSONL and runs a two-pass LLM evaluation.
 
 ```bash
 cargo run --release -- judge out/available.jsonl [OPTIONS]
@@ -220,7 +245,7 @@ cargo run --release -- judge out/available.jsonl [OPTIONS]
 
 Important options:
 
-- `--provider <openai|ollama>`: LLM backend; default `openai`
+- `--provider <anthropic|openai|ollama>`: LLM backend; default `anthropic`
 - `--api-base <URL>`: override the selected provider's API base URL
 - `--brief <FILE>`: company positioning brief; default `data/brief.txt`
 - `--triage-model <MODEL>`: model used for bulk fit scoring; provider-dependent default
