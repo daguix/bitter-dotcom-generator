@@ -11,3 +11,6 @@
 .env.*
 !.env.example
 *.key
+
+# Archived naming projects (inputs, outputs, LLM caches): private.
+/archive/
